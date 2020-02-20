@@ -23,7 +23,7 @@ func Listen(ctx context.Context) {
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
 	// Make a channel for results and start listening
-	entriesCh := make(chan *mdns.ServiceEntry, 5)
+	entries := make(chan *mdns.ServiceEntry, 5)
 
 	// Start the lookup
 	go func(entries chan *mdns.ServiceEntry) {
@@ -37,12 +37,11 @@ func Listen(ctx context.Context) {
 				mdns.Lookup(fmt.Sprintf("%s", config.ServiceName), entries)
 			}
 		}
-	}(entriesCh)
-	for entry := range entriesCh {
+	}(entries)
+	for entry := range entries {
 		fmt.Printf("Got new entry: %+v\n", entry)
 		Connect(entry)
 	}
-	fmt.Println("Done connecting")
 }
 
 func Connect(entry *mdns.ServiceEntry) {
@@ -64,8 +63,17 @@ func Connect(entry *mdns.ServiceEntry) {
 }
 
 func register(entry *mdns.ServiceEntry) {
+	if _, ok := registry[entry.InfoFields[0]]; ok {
+		return
+	}
+
 	u, _ := url.Parse(fmt.Sprintf("http://%s:%d", entry.AddrV4, entry.Port))
-	rp := httputil.NewSingleHostReverseProxy(u)
-	Phonebook.Handle(entry.InfoFields[0], rp)
+	var handler http.Handler
+	handler = httputil.NewSingleHostReverseProxy(u)
+	parts := strings.SplitN(entry.InfoFields[0], "/", 2)
+	if len(parts) > 1 && parts[1] != "" {
+		handler = http.StripPrefix(fmt.Sprintf("/%s", parts[1]), handler)
+	}
+	Phonebook.Handle(entry.InfoFields[0], handler)
 	registry[entry.InfoFields[0]] = entry
 }
