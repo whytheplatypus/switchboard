@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/artistedev/switchboard/config"
 	"github.com/hashicorp/mdns"
+	"github.com/whytheplatypus/switchboard/config"
 )
 
 var Phonebook = &defaultServeMux

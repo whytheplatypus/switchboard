@@ -10,8 +10,8 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/artistedev/switchboard/client"
-	"github.com/artistedev/switchboard/operator"
+	"github.com/whytheplatypus/switchboard/client"
+	"github.com/whytheplatypus/switchboard/operator"
 )
 
 var cmds = map[string]func(args []string){

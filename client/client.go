@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/artistedev/switchboard/config"
 	"github.com/hashicorp/mdns"
+	"github.com/whytheplatypus/switchboard/config"
 )
 
 func Hookup(pattern string, port int) *mdns.Server {

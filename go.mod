@@ -1,4 +1,4 @@
-module github.com/artistedev/switchboard
+module github.com/whytheplatypus/switchboard
 
 go 1.13
 
