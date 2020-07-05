@@ -2,6 +2,7 @@ package operator
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httputil"
@@ -13,45 +14,47 @@ import (
 	"github.com/whytheplatypus/switchboard/config"
 )
 
-var Phonebook = &defaultServeMux
+var (
+	ErrUnknownEntry   = errors.New("mdns: unkown entry type recieved")
+	ErrDuplicateEntry = errors.New("mdns: duplicate entry recieved")
+)
 
 var defaultServeMux http.ServeMux
 
+var Phonebook = &defaultServeMux
+
 var registry = map[string]*mdns.ServiceEntry{}
 
-func Listen(ctx context.Context) {
+func init() {
+	Phonebook.HandleFunc("/", notFound)
+}
+
+func notFound(w http.ResponseWriter, r *http.Request) {
+	http.NotFound(w, r)
+}
+
+func Listen(ctx context.Context, entries chan *mdns.ServiceEntry) {
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
-	// Make a channel for results and start listening
-	entries := make(chan *mdns.ServiceEntry, 5)
 
 	// Start the lookup
-	go func(entries chan *mdns.ServiceEntry) {
-		defer close(entries)
-		defer fmt.Println("Done listening")
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-				mdns.Lookup(fmt.Sprintf("%s", config.ServiceName), entries)
-			}
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			mdns.Lookup(fmt.Sprintf("%s", config.ServiceName), entries)
 		}
-	}(entries)
-	for entry := range entries {
-		fmt.Printf("Got new entry: %+v\n", entry)
-		Connect(entry)
 	}
 }
 
-func Connect(entry *mdns.ServiceEntry) {
+func Connect(entry *mdns.ServiceEntry) error {
 	if !strings.Contains(entry.Name, config.ServiceName) {
-		fmt.Println("unknown entry")
-		return
+		return ErrUnknownEntry
 	}
 	if existing, ok := registry[entry.InfoFields[0]]; ok {
 		if existing.AddrV4.Equal(entry.AddrV4) && existing.Port == entry.Port {
-			return
+			return ErrDuplicateEntry
 		}
 		*Phonebook = http.ServeMux{}
 		delete(registry, entry.InfoFields[0])
@@ -60,6 +63,7 @@ func Connect(entry *mdns.ServiceEntry) {
 		}
 	}
 	register(entry)
+	return nil
 }
 
 func register(entry *mdns.ServiceEntry) {
