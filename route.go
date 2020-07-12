@@ -7,7 +7,6 @@ import (
 	"log"
 
 	"github.com/gorilla/handlers"
-	"github.com/hashicorp/mdns"
 	"github.com/whytheplatypus/switchboard/operator"
 )
 
@@ -24,11 +23,8 @@ func route(args []string, ctx context.Context) {
 		configureLog(*httpLog)
 	}
 
-	// Make a channel for results and start listening
-	entries := make(chan *mdns.ServiceEntry, 5)
-	defer close(entries)
-	go operator.Listen(ctx, entries)
 	go func() {
+		entries := operator.Listen(ctx)
 		for entry := range entries {
 			log.Printf("Got new entry: %+v\n", entry)
 			if err := operator.Connect(entry); err != nil {
@@ -39,7 +35,7 @@ func route(args []string, ctx context.Context) {
 
 	srv := &server{
 		Addr:    fmt.Sprintf(":%d", *port),
-		Handler: handlers.LoggingHandler(log.Writer(), operator.Phonebook),
+		Handler: handlers.LoggingHandler(log.Writer(), operator.Handler()),
 		CertDir: *cdir,
 		Domains: domains,
 	}
