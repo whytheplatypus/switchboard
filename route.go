@@ -5,9 +5,9 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
-	"log"
 	"net/http"
 
+	"github.com/gorilla/handlers"
 	"github.com/whytheplatypus/switchboard/operator"
 )
 
@@ -28,11 +28,11 @@ func route(args []string, ctx context.Context) {
 		entries := operator.Listen(ctx)
 		for entry := range entries {
 			if err := operator.Connect(entry); err != nil {
-				log.Println(err)
+				registrationLog.Println(err)
 				continue
 			}
 			// register
-			log.Printf(`{"send":"%s","to":"http://%s:%d"}`,
+			registrationLog.Printf(`{"send":"%s","to":"http://%s:%d"}`,
 				entry.InfoFields[0],
 				entry.AddrV4,
 				entry.Port,
@@ -56,7 +56,7 @@ func route(args []string, ctx context.Context) {
 		}
 
 		b, _ := json.Marshal(info)
-		log.Println(string(b))
+		routingLog.Println(string(b))
 		return nil
 	}
 
@@ -71,14 +71,12 @@ func route(args []string, ctx context.Context) {
 
 	srv := &server{
 		Addr:    fmt.Sprintf(":%d", *port),
-		Handler: h,
+		Handler: handlers.LoggingHandler(&lWriter{accessLog}, h),
 		CertDir: *cdir,
 		Domains: domains,
 	}
 
 	if err := srv.serve(ctx); err != nil {
-		log.Fatal(err)
+		routingLog.Fatal(err)
 	}
-
-	fmt.Println("exiting")
 }
