@@ -23,7 +23,15 @@ func parseURL(s string) *url.URL {
 }
 
 func TestHandler(t *testing.T) {
-	h := defaultRouter.Handler()
+	router := defaultRouter.Handler()
+	h := http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
+		defer func() {
+			if err := recover(); err != nil {
+				http.NotFound(rw, r)
+			}
+		}()
+		router.ServeHTTP(rw, r)
+	})
 	srv := httptest.NewServer(h)
 	defer srv.Close()
 	pathEchoSrv := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {

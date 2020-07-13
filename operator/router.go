@@ -3,7 +3,6 @@ package operator
 import (
 	"errors"
 	"fmt"
-	"log"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
@@ -40,7 +39,6 @@ func (r *Router) register(pattern string, target *url.URL) {
 	defer r.mu.Unlock()
 	r.phonebook[pattern] = target
 	r.updateIndex()
-	log.Printf("Register %+v for %+v\n", pattern, target)
 }
 
 func (r *Router) updateIndex() {
@@ -65,7 +63,6 @@ func (r *Router) direct(req *http.Request) {
 	if !strings.HasPrefix(req.URL.Path, "/") {
 		req.URL.Path = fmt.Sprintf("/%s", req.URL.Path)
 	}
-	log.Println("Routing to", req.URL)
 	if targetQuery == "" || req.URL.RawQuery == "" {
 		req.URL.RawQuery = targetQuery + req.URL.RawQuery
 	} else {
@@ -82,7 +79,6 @@ func (r *Router) lookup(req *http.Request) (*url.URL, *url.URL) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	req.URL.Host = req.Host
-	log.Println("Looking up", req.URL.Host, req.URL.Path, req.URL.RawQuery, "in", len(r.index), "entries")
 	for _, v := range r.index {
 		u, err := url.Parse(v)
 		if err != nil {
@@ -102,27 +98,14 @@ func (r *Router) match(pattern *url.URL, requested *url.URL) bool {
 	return defaultMatch(pattern, requested)
 }
 
-func (r *Router) Handler() http.Handler {
+func (r *Router) Handler() *httputil.ReverseProxy {
 	proxy := &httputil.ReverseProxy{
 		Director: r.direct,
-		ModifyResponse: func(r *http.Response) error {
-			log.Println("got", r.Status)
-			log.Println("got", r.Request.URL, r.Request.Host)
-			return nil
-		},
 	}
-	return http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
-		defer func() {
-			if err := recover(); err != nil {
-				log.Println(err)
-				http.NotFound(rw, r)
-			}
-		}()
-		proxy.ServeHTTP(rw, r)
-	})
+	return proxy
 }
 
-func Handler() http.Handler {
+func Handler() *httputil.ReverseProxy {
 	return defaultRouter.Handler()
 }
 

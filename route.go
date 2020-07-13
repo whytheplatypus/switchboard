@@ -2,11 +2,12 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"log"
+	"net/http"
 
-	"github.com/gorilla/handlers"
 	"github.com/whytheplatypus/switchboard/operator"
 )
 
@@ -26,16 +27,51 @@ func route(args []string, ctx context.Context) {
 	go func() {
 		entries := operator.Listen(ctx)
 		for entry := range entries {
-			log.Printf("Got new entry: %+v\n", entry)
 			if err := operator.Connect(entry); err != nil {
 				log.Println(err)
+				continue
 			}
+			// register
+			log.Printf(`{"send":"%s","to":"http://%s:%d"}`,
+				entry.InfoFields[0],
+				entry.AddrV4,
+				entry.Port,
+			)
 		}
 	}()
 
+	router := operator.Handler()
+
+	router.ModifyResponse = func(r *http.Response) error {
+		info := struct {
+			Host   string `json:"host"`
+			Target string `json:"target"`
+			Path   string `json:"path"`
+			Query  string `json:"query"`
+		}{
+			r.Request.Host,
+			r.Request.URL.Host,
+			r.Request.URL.Path,
+			r.Request.URL.RawQuery,
+		}
+
+		b, _ := json.Marshal(info)
+		log.Println(string(b))
+		return nil
+	}
+
+	h := http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
+		defer func() {
+			if err := recover(); err != nil {
+				http.NotFound(rw, r)
+			}
+		}()
+		router.ServeHTTP(rw, r)
+	})
+
 	srv := &server{
 		Addr:    fmt.Sprintf(":%d", *port),
-		Handler: handlers.LoggingHandler(log.Writer(), operator.Handler()),
+		Handler: h,
 		CertDir: *cdir,
 		Domains: domains,
 	}
