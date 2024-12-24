@@ -2,19 +2,25 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"flag"
-	"fmt"
+	"log"
+	"net"
 	"net/http"
 
 	"github.com/gorilla/handlers"
 	"github.com/whytheplatypus/switchboard/operator"
+	"golang.org/x/crypto/ssh"
 )
 
 func route(args []string, ctx context.Context) {
 	flags := flag.NewFlagSet("route", flag.ExitOnError)
-	port := flags.Int("port", 80, "the port this should run on")
+	addr := flags.String("addr", ":80", "the port this should run on")
 	cdir := flags.String("cert-directory", "/var/cache/switchboard/autocert", "the directory to store the acme cert")
+	sshAddr := flags.String("ssh", "", "the address of a remote server to use as an ssh reverse proxy")
+	sshUsername := flags.String("ssh-username", "", "the username for the remote server")
+	sshPassword := flags.String("ssh-password", "", "the password for the remote server")
 	var domains StringArray
 	flags.Var(&domains, "domain", "a domain to register a tls cert for")
 	httpLog := flags.String("log-http", "", "The address to serve logs over, no logs are served if empty")
@@ -69,14 +75,49 @@ func route(args []string, ctx context.Context) {
 		router.ServeHTTP(rw, r)
 	})
 
-	srv := &server{
-		Addr:    fmt.Sprintf(":%d", *port),
-		Handler: handlers.LoggingHandler(&lWriter{accessLog}, h),
-		CertDir: *cdir,
-		Domains: domains,
+	var l net.Listener
+	if *sshAddr != "" {
+		var err error
+		l, err = SSHListener(ctx, *sshUsername, *sshAddr, *addr, ssh.Password(*sshPassword))
+		if err != nil {
+			routingLog.Fatal(err)
+		}
+		log.Println("SSH Listener created")
 	}
 
-	if err := srv.serve(ctx); err != nil {
+	if l == nil {
+		var err error
+		l, err = net.Listen("tcp", *addr)
+		if err != nil {
+			routingLog.Fatal(err)
+		}
+		log.Println("Standard Listener created")
+	}
+
+	TLSConfig, err := TLSConfig(*cdir, domains...)
+	if err != nil {
 		routingLog.Fatal(err)
 	}
+	if TLSConfig != nil {
+		l = tls.NewListener(l, TLSConfig)
+		log.Println("TLS Listener created")
+	}
+
+	srv := &http.Server{
+		//Addr:    ":8080",
+		Handler: handlers.LoggingHandler(&lWriter{accessLog}, h),
+	}
+
+	shutdownCtx, cancel := context.WithCancel(context.Background())
+	go deferContext(ctx, func() error {
+		srv.Shutdown(context.Background())
+		cancel()
+		return nil
+	})
+
+	log.Println("Switchboard server starting")
+	if err := srv.Serve(l); err != nil {
+		routingLog.Fatal(err)
+	}
+	<-shutdownCtx.Done()
 }

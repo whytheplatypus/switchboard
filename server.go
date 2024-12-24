@@ -2,10 +2,14 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
+	"log"
+	"net"
 	"net/http"
 	"os"
 
 	"golang.org/x/crypto/acme/autocert"
+	"golang.org/x/crypto/ssh"
 )
 
 type server struct {
@@ -15,38 +19,54 @@ type server struct {
 	Domains []string
 }
 
-func (s *server) serve(ctx context.Context) error {
-
-	srv := &http.Server{
-		Addr:    s.Addr,
-		Handler: s.Handler,
+func TLSConfig(certDir string, domains ...string) (*tls.Config, error) {
+	if certDir == "" || domains == nil {
+		return nil, nil
+	}
+	m := &autocert.Manager{
+		Prompt: autocert.AcceptTOS,
 	}
 
-	if s.CertDir != "" && len(s.Domains) > 0 {
-		m := &autocert.Manager{
-			Prompt: autocert.AcceptTOS,
-		}
+	m.HostPolicy = autocert.HostWhitelist(domains...)
 
-		m.HostPolicy = autocert.HostWhitelist(s.Domains...)
-
-		if err := os.MkdirAll(s.CertDir, os.ModePerm); err != nil {
-			return err
-		}
-		m.Cache = autocert.DirCache(s.CertDir)
-		srv.Handler = m.HTTPHandler(nil)
-
-		crtSrv := &http.Server{
-			Handler: s.Handler,
-		}
-		//TODO return errors
-		go crtSrv.Serve(m.Listener())
-		defer crtSrv.Shutdown(context.Background())
+	if err := os.MkdirAll(certDir, os.ModePerm); err != nil {
+		return nil, err
 	}
+	m.Cache = autocert.DirCache(certDir)
+	return m.TLSConfig(), nil
+}
 
-	//TODO return errors
-	go srv.ListenAndServe()
-	<-ctx.Done()
-	//TODO return errors
-	srv.Shutdown(context.Background())
-	return nil
+func BannerDisplayStderr() ssh.BannerCallback {
+	return func(banner string) error {
+		log.Println(banner)
+		return nil
+	}
+}
+
+func SSHListener(ctx context.Context, username string, addr string, Laddr string, auth ...ssh.AuthMethod) (net.Listener, error) {
+	config := &ssh.ClientConfig{
+		User:            username,
+		Auth:            auth,
+		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
+		BannerCallback:  BannerDisplayStderr(),
+	}
+	// Dial your ssh server.
+	conn, err := ssh.Dial("tcp", addr, config)
+	go deferContext(ctx, conn.Close)
+
+	log.Println("setting up listening")
+
+	// Request the remote side to open port 8080 on all interfaces.
+	l, err := conn.Listen("tcp", ":80")
+	if err != nil {
+		return l, err
+	}
+	log.Println(l.Addr())
+	go deferContext(ctx, l.Close)
+	return l, nil
+}
+
+func deferContext[T any](c context.Context, f func() T) {
+	<-c.Done()
+	f()
 }
