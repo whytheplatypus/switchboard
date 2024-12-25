@@ -80,11 +80,7 @@ func SSHListener(ctx context.Context, username string, addr string, Laddr string
 
 	log.Println("setting up listening")
 
-	a := &net.TCPAddr{
-		Port: 80,
-	}
-	log.Println(a.IP.String())
-	l, err := conn.ListenTCP(a)
+	l, err := conn.Listen("tcp", Laddr)
 	if err != nil {
 		return l, err
 	}
