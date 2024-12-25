@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"crypto/tls"
 	"encoding/json"
 	"flag"
 	"log"
@@ -99,7 +98,7 @@ func route(args []string, ctx context.Context) {
 		routingLog.Fatal(err)
 	}
 	if TLSConfig != nil {
-		l = tls.NewListener(l, TLSConfig)
+		//l = tls.NewListener(l, TLSConfig)
 		log.Println("TLS Listener created")
 	}
 

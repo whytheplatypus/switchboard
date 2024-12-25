@@ -56,12 +56,11 @@ func SSHListener(ctx context.Context, username string, addr string, Laddr string
 
 	log.Println("setting up listening")
 
-	// Request the remote side to open port 8080 on all interfaces.
-	l, err := conn.Listen("tcp", ":80")
+	// Request the remote side to open port 8080 onopen failed: connect failed: ssh: cannot parse IP address "<nil>" all interfaces.
+	l, err := conn.Listen("tcp", "localhost.run:80")
 	if err != nil {
 		return l, err
 	}
-	log.Println(l.Addr())
 	go deferContext(ctx, l.Close)
 	return l, nil
 }
