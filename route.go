@@ -77,7 +77,11 @@ func route(args []string, ctx context.Context) {
 	var l net.Listener
 	if *sshAddr != "" {
 		var err error
-		l, err = SSHListener(ctx, *sshUsername, *sshAddr, *addr, ssh.Password(*sshPassword))
+		auth := []ssh.AuthMethod{}
+		if *sshPassword != "" {
+			auth = append(auth, ssh.Password(*sshPassword))
+		}
+		l, err = SSHListener(ctx, *sshUsername, *sshAddr, *addr, auth...)
 		if err != nil {
 			routingLog.Fatal(err)
 		}

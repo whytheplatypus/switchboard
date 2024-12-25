@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"crypto/tls"
+	"io"
 	"log"
 	"net"
 	"net/http"
@@ -44,6 +45,7 @@ func BannerDisplayStderr() ssh.BannerCallback {
 }
 
 func SSHListener(ctx context.Context, username string, addr string, Laddr string, auth ...ssh.AuthMethod) (net.Listener, error) {
+	log.Println("authenticating as", username)
 	config := &ssh.ClientConfig{
 		User:            username,
 		Auth:            auth,
@@ -57,13 +59,36 @@ func SSHListener(ctx context.Context, username string, addr string, Laddr string
 	}
 	go deferContext(ctx, conn.Close)
 
+	s, err := conn.NewSession()
+	go func() {
+		r, err := s.StderrPipe()
+		if err != nil {
+			log.Println("faile", err)
+		}
+		io.Copy(os.Stdout, r)
+	}()
+	go func() {
+		r, err := s.StdoutPipe()
+		if err != nil {
+			log.Println("faile", err)
+		}
+		io.Copy(os.Stdout, r)
+	}()
+	if err := s.Shell(); err != nil {
+		log.Println("oh no!", err)
+	}
+
 	log.Println("setting up listening")
 
-	// Request the remote side to open port 8080 onopen failed: connect failed: ssh: cannot parse IP address "<nil>" all interfaces.
-	l, err := conn.Listen("tcp", Laddr)
+	a := &net.TCPAddr{
+		Port: 80,
+	}
+	log.Println(a.IP.String())
+	l, err := conn.ListenTCP(a)
 	if err != nil {
 		return l, err
 	}
+	log.Println(l.Addr())
 	go deferContext(ctx, l.Close)
 	return l, nil
 }
