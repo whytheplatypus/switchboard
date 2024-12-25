@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"strconv"
 
 	"golang.org/x/crypto/acme/autocert"
 	"golang.org/x/crypto/ssh"
@@ -80,9 +81,18 @@ func SSHListener(ctx context.Context, username string, addr string, Laddr string
 
 	log.Println("setting up listening")
 
-	l, err := conn.Listen("tcp", Laddr)
+	la, p, err := net.SplitHostPort(Laddr)
 	if err != nil {
-		return l, err
+		return nil, err
+	}
+	pp, err := strconv.ParseInt(p, 10, 32)
+	if err != nil {
+		return nil, err
+	}
+	l, err := conn.ListenTCPHostname(la, uint32(pp))
+	//l, err := conn.Listen("tcp", Laddr)
+	if err != nil {
+		return nil, err
 	}
 	log.Println(l.Addr())
 	go deferContext(ctx, l.Close)
