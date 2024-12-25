@@ -52,6 +52,9 @@ func SSHListener(ctx context.Context, username string, addr string, Laddr string
 	}
 	// Dial your ssh server.
 	conn, err := ssh.Dial("tcp", addr, config)
+	if err != nil {
+		return nil, err
+	}
 	go deferContext(ctx, conn.Close)
 
 	log.Println("setting up listening")
