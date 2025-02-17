@@ -8,7 +8,6 @@ import (
 	"net"
 	"net/http"
 	"os"
-	"strconv"
 
 	"golang.org/x/crypto/acme/autocert"
 	"golang.org/x/crypto/ssh"
@@ -56,6 +55,7 @@ func SSHListener(ctx context.Context, username string, addr string, Laddr string
 	// Dial your ssh server.
 	conn, err := ssh.Dial("tcp", addr, config)
 	if err != nil {
+		log.Println("failed to dial ssh server", err)
 		return nil, err
 	}
 	go deferContext(ctx, conn.Close)
@@ -81,16 +81,12 @@ func SSHListener(ctx context.Context, username string, addr string, Laddr string
 
 	log.Println("setting up listening")
 
-	la, p, err := net.SplitHostPort(Laddr)
+	la, err := net.ResolveTCPAddr("tcp", Laddr)
 	if err != nil {
 		return nil, err
 	}
-	pp, err := strconv.ParseInt(p, 10, 32)
-	if err != nil {
-		return nil, err
-	}
-	l, err := conn.ListenTCPHostname(la, uint32(pp))
-	//l, err := conn.Listen("tcp", Laddr)
+
+	l, err := conn.ListenTCP(la)
 	if err != nil {
 		return nil, err
 	}

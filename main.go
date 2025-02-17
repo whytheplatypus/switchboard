@@ -17,6 +17,13 @@ var cmds = map[string]func(args []string, ctx context.Context){
 func main() {
 	flag.Parse()
 	args := flag.Args()
+	if len(args) < 1 {
+		flag.Usage()
+		for key := range cmds {
+			fmt.Fprintln(flag.CommandLine.Output(), key)
+		}
+		os.Exit(2)
+	}
 	cmd, ok := cmds[args[0]]
 	if !ok {
 		flag.Usage()
