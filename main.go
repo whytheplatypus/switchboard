@@ -4,6 +4,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"log"
 	"os"
 	"os/signal"
 	"syscall"
@@ -15,6 +16,7 @@ var cmds = map[string]func(args []string, ctx context.Context){
 }
 
 func main() {
+	log.SetFlags(log.LstdFlags | log.Lshortfile)
 	flag.Parse()
 	args := flag.Args()
 	if len(args) < 1 {

@@ -7,6 +7,8 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/http/httputil"
+	"net/url"
 
 	"github.com/gorilla/handlers"
 	"github.com/whytheplatypus/switchboard/operator"
@@ -46,6 +48,11 @@ func route(args []string, ctx context.Context) {
 	}()
 
 	router := operator.Handler()
+	testURL, err := url.Parse("http://192.168.50.150:30000")
+	if err != nil {
+		log.Fatal(err)
+	}
+	router = httputil.NewSingleHostReverseProxy(testURL)
 
 	router.ModifyResponse = func(r *http.Response) error {
 		info := struct {
@@ -61,6 +68,7 @@ func route(args []string, ctx context.Context) {
 		}
 
 		b, _ := json.Marshal(info)
+		routingLog.Println(r.Request.URL.Query())
 		routingLog.Println(string(b))
 		return nil
 	}
