@@ -1,6 +1,6 @@
 module github.com/whytheplatypus/switchboard
 
-go 1.22.3
+go 1.24.0
 
 require (
 	github.com/gorilla/handlers v1.5.2

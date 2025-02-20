@@ -2,15 +2,11 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"flag"
 	"log"
 	"net"
 	"net/http"
-	"net/http/httputil"
-	"net/url"
 
-	"github.com/gorilla/handlers"
 	"github.com/whytheplatypus/switchboard/operator"
 	"golang.org/x/crypto/ssh"
 )
@@ -48,32 +44,39 @@ func route(args []string, ctx context.Context) {
 	}()
 
 	router := operator.Handler()
-	testURL, err := url.Parse("http://192.168.50.150:30000")
-	if err != nil {
-		log.Fatal(err)
-	}
-	router = httputil.NewSingleHostReverseProxy(testURL)
 
-	router.ModifyResponse = func(r *http.Response) error {
-		info := struct {
-			Host   string `json:"host"`
-			Target string `json:"target"`
-			Path   string `json:"path"`
-			Query  string `json:"query"`
-		}{
-			r.Request.Host,
-			r.Request.URL.Host,
-			r.Request.URL.Path,
-			r.Request.URL.RawQuery,
+	/*
+		http.ListenAndServe(":8080", http.HandlerFunc(
+			func(rw http.ResponseWriter, r *http.Request) {
+				rw.(http.Hijacker).Hijack()
+				log.Println("DID IT!!")
+				return
+			}))
+	*/
+	/*
+		router.ModifyResponse = func(r *http.Response) error {
+			info := struct {
+				Host   string `json:"host"`
+				Target string `json:"target"`
+				Path   string `json:"path"`
+				Query  string `json:"query"`
+			}{
+				r.Request.Host,
+				r.Request.URL.Host,
+				r.Request.URL.Path,
+				r.Request.URL.RawQuery,
+			}
+
+			b, _ := json.Marshal(info)
+			routingLog.Println(r.Request.URL.Query())
+			routingLog.Println(string(b))
+			return nil
 		}
-
-		b, _ := json.Marshal(info)
-		routingLog.Println(r.Request.URL.Query())
-		routingLog.Println(string(b))
-		return nil
-	}
-
+	*/
 	h := http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
+		rw.(http.Hijacker).Hijack()
+		log.Println("DID IT!!")
+		return
 		defer func() {
 			if err := recover(); err != nil {
 				http.NotFound(rw, r)
@@ -81,7 +84,6 @@ func route(args []string, ctx context.Context) {
 		}()
 		router.ServeHTTP(rw, r)
 	})
-
 	var l net.Listener
 	if *sshAddr != "" {
 		var err error
@@ -116,7 +118,8 @@ func route(args []string, ctx context.Context) {
 
 	srv := &http.Server{
 		//Addr:    ":8080",
-		Handler: handlers.LoggingHandler(&lWriter{accessLog}, h),
+		//Handler: handlers.LoggingHandler(&lWriter{accessLog}, h),
+		Handler: h,
 	}
 
 	shutdownCtx, cancel := context.WithCancel(context.Background())

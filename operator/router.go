@@ -4,7 +4,6 @@ import (
 	"errors"
 	"log"
 	"net/http"
-	"net/http/httputil"
 	"net/url"
 	"sort"
 	"strings"
@@ -51,26 +50,35 @@ func (r *Router) updateIndex() {
 	sort.Sort(r.index)
 }
 
-func (r *Router) direct(req *http.Request) {
-	log.Printf("%+v\n", req)
-	target, _ := r.lookup(req)
+func (r *Router) direct(req *ProxyRequest) {
+	log.Printf("In %+v\n", req.In)
+	target, _ := r.lookup(req.In)
 	if target == nil {
 		panic("No Target URL found")
 	}
+	req.SetXForwarded()
+	req.SetURL(target)
+	if connHeader := req.In.Header.Get("Connection"); connHeader != "" {
+		log.Println("setting Connection header to", connHeader)
+		req.Out.Header["Connection"] = []string{"keep-alive", connHeader}
+	}
 	//targetQuery := target.RawQuery
 	//req.URL.Scheme = target.Scheme
-	log.Println(target.Host)
-	log.Println(req.URL)
-	req.URL.Scheme = "https"
-	targetQuery := target.RawQuery
-	req.URL.Scheme = target.Scheme
-	req.URL.Host = target.Host
-	//req.URL.Path, req.URL.RawPath = joinURLPath(target, req.URL)
-	if targetQuery == "" || req.URL.RawQuery == "" {
-		req.URL.RawQuery = targetQuery + req.URL.RawQuery
-	} else {
-		req.URL.RawQuery = targetQuery + "&" + req.URL.RawQuery
-	}
+	/*
+		log.Println(target.Host)
+		log.Println(req.URL)
+		req.URL.Scheme = "https"
+		targetQuery := target.RawQuery
+		req.URL.Scheme = target.Scheme
+		req.URL.Host = target.Host
+		//req.URL.Path, req.URL.RawPath = joinURLPath(target, req.URL)
+		if targetQuery == "" || req.URL.RawQuery == "" {
+			req.URL.RawQuery = targetQuery + req.URL.RawQuery
+		} else {
+			req.URL.RawQuery = targetQuery + "&" + req.URL.RawQuery
+		}
+	*/
+	log.Printf("Out %+v\n", req.Out)
 	/*
 		if req.Header.Get("Upgrade") == "websocket" {
 			req.URL.Scheme = "wss"
@@ -87,10 +95,6 @@ func (r *Router) direct(req *http.Request) {
 			req.URL.RawQuery = targetQuery + "&" + req.URL.RawQuery
 		}
 	*/
-	if _, ok := req.Header["User-Agent"]; !ok {
-		// explicitly disable User-Agent so it's not set to default value
-		req.Header.Set("User-Agent", "")
-	}
 
 }
 
@@ -121,14 +125,14 @@ func (r *Router) match(pattern *url.URL, requested *url.URL) bool {
 	return defaultMatch(pattern, requested)
 }
 
-func (r *Router) Handler() *httputil.ReverseProxy {
-	proxy := &httputil.ReverseProxy{
-		Director: r.direct,
+func (r *Router) Handler() *ReverseProxy {
+	proxy := &ReverseProxy{
+		Rewrite: r.direct,
 	}
 	return proxy
 }
 
-func Handler() *httputil.ReverseProxy {
+func Handler() *ReverseProxy {
 	return defaultRouter.Handler()
 }
 
