@@ -2,13 +2,14 @@ package client
 
 import (
 	"fmt"
+	"net"
 	"os"
 
 	"github.com/hashicorp/mdns"
 	"github.com/whytheplatypus/switchboard/config"
 )
 
-func Hookup(pattern string, port int) *mdns.Server {
+func Hookup(pattern string, port int, ip ...net.IP) *mdns.Server {
 	// Setup our service export
 	host, _ := os.Hostname()
 	info := []string{pattern}
@@ -18,7 +19,7 @@ func Hookup(pattern string, port int) *mdns.Server {
 		"",
 		"",
 		port,
-		nil,
+		ip,
 		info,
 	)
 
