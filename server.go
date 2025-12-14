@@ -2,8 +2,11 @@ package main
 
 import (
 	"context"
+	"log/slog"
+	"net"
 	"net/http"
 	"os"
+	"slices"
 
 	"golang.org/x/crypto/acme/autocert"
 )
@@ -27,21 +30,26 @@ func (s *server) serve(ctx context.Context) error {
 			Prompt: autocert.AcceptTOS,
 		}
 
+		slog.Info("Setting up tls certs", "domains", s.Domains)
 		m.HostPolicy = autocert.HostWhitelist(s.Domains...)
 
 		if err := os.MkdirAll(s.CertDir, os.ModePerm); err != nil {
 			return err
 		}
 		m.Cache = autocert.DirCache(s.CertDir)
-		srv.Handler = m.HTTPHandler(nil)
+		srv.Handler = m.HTTPHandler(http.HandlerFunc(s.HTTPSChallengeFallbackHandler))
 
 		crtSrv := &http.Server{
-			Addr:      ":443",
 			Handler:   s.Handler,
+			Addr:      ":8883",
 			TLSConfig: m.TLSConfig(),
 		}
 		//TODO return errors
-		go crtSrv.ListenAndServeTLS("", "")
+		go func() {
+			if err := crtSrv.ListenAndServeTLS("", ""); err != nil {
+				slog.Error("tls server error", "error", err)
+			}
+		}()
 		defer crtSrv.Shutdown(context.Background())
 	}
 
@@ -51,4 +59,29 @@ func (s *server) serve(ctx context.Context) error {
 	//TODO return errors
 	srv.Shutdown(context.Background())
 	return nil
+}
+
+func (s *server) HTTPSChallengeFallbackHandler(w http.ResponseWriter, r *http.Request) {
+	host, _, err := net.SplitHostPort(r.Host)
+	if err != nil {
+		host = r.Host
+	}
+	if slices.Contains(s.Domains, host) {
+		if r.Method != "GET" && r.Method != "HEAD" {
+			http.Error(w, "Use HTTPS", http.StatusBadRequest)
+			return
+		}
+		target := "https://" + stripPort(r.Host) + r.URL.RequestURI()
+		http.Redirect(w, r, target, http.StatusFound)
+		return
+	}
+	s.Handler.ServeHTTP(w, r)
+}
+
+func stripPort(hostport string) string {
+	host, _, err := net.SplitHostPort(hostport)
+	if err != nil {
+		return hostport
+	}
+	return net.JoinHostPort(host, "8883")
 }
