@@ -36,10 +36,12 @@ func (s *server) serve(ctx context.Context) error {
 		srv.Handler = m.HTTPHandler(nil)
 
 		crtSrv := &http.Server{
-			Handler: s.Handler,
+			Addr:      ":443",
+			Handler:   s.Handler,
+			TLSConfig: m.TLSConfig(),
 		}
 		//TODO return errors
-		go crtSrv.Serve(m.Listener())
+		go crtSrv.ListenAndServeTLS("", "")
 		defer crtSrv.Shutdown(context.Background())
 	}
 

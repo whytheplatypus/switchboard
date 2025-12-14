@@ -2,6 +2,8 @@ package client
 
 import (
 	"fmt"
+	"log/slog"
+	"net"
 	"os"
 
 	"github.com/hashicorp/mdns"
@@ -21,8 +23,17 @@ func Hookup(pattern string, port int) *mdns.Server {
 		nil,
 		info,
 	)
+	conf := &mdns.Config{Zone: service}
+	if config.Iface != "" {
+		if iface, err := net.InterfaceByName(config.Iface); err == nil {
+			slog.Info("Using interface provided", "interface", iface.Name)
+			conf.Iface = iface
+		} else {
+			slog.Error("failed to get interface", "error", err)
+		}
+	}
 
 	// Create the mDNS server, defer shutdown
-	server, _ := mdns.NewServer(&mdns.Config{Zone: service})
+	server, _ := mdns.NewServer(conf)
 	return server
 }

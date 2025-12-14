@@ -3,6 +3,10 @@ package operator
 import (
 	"context"
 	"fmt"
+	"io"
+	"log"
+	"log/slog"
+	"net"
 	"net/url"
 	"strings"
 	"time"
@@ -14,6 +18,17 @@ import (
 func Listen(ctx context.Context) <-chan *mdns.ServiceEntry {
 	// Make a channel for results and start listening
 	entries := make(chan *mdns.ServiceEntry, 5)
+	params := mdns.DefaultParams(config.ServiceName)
+	if config.Iface != "" {
+		if iface, err := net.InterfaceByName(config.Iface); err == nil {
+			slog.Info("Using interface provided", "interface", iface.Name)
+			params.Interface = iface
+		} else {
+			slog.Error("failed to get interface", "error", err)
+		}
+	}
+	params.Logger = log.New(io.Discard, "", 0)
+	params.Entries = entries
 
 	// Start the lookup
 	go func() {
@@ -25,7 +40,9 @@ func Listen(ctx context.Context) <-chan *mdns.ServiceEntry {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				mdns.Lookup(fmt.Sprintf("%s", config.ServiceName), entries)
+				if err := mdns.Query(params); err != nil {
+					slog.Error("mdns query failed", "error", err)
+				}
 			}
 		}
 	}()
