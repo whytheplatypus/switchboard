@@ -5,20 +5,26 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"log"
 	"net/http"
+	"strings"
 
 	"github.com/gorilla/handlers"
+	"github.com/whytheplatypus/switchboard/config"
 	"github.com/whytheplatypus/switchboard/operator"
 )
 
 func route(args []string, ctx context.Context) {
-	flags := flag.NewFlagSet("route", flag.ExitOnError)
+	flags := flag.NewFlagSet("route", flag.ContinueOnError)
 	port := flags.Int("port", 80, "the port this should run on")
 	cdir := flags.String("cert-directory", "/var/cache/switchboard/autocert", "the directory to store the acme cert")
 	var domains StringArray
 	flags.Var(&domains, "domain", "a domain to register a tls cert for")
 	httpLog := flags.String("log-http", "", "The address to serve logs over, no logs are served if empty")
-	flags.Parse(args)
+	flags.StringVar(&config.Iface, "iface", "", "interface to listen on")
+	if err := flags.Parse(args); err != nil && !strings.HasPrefix(err.Error(), "flag provided but not defined") {
+		log.Fatal(err)
+	}
 
 	if *httpLog != "" {
 		configureLog(*httpLog)
