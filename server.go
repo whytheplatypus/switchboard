@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"log/slog"
 	"net"
 	"net/http"
 	"os"
@@ -29,6 +30,7 @@ func (s *server) serve(ctx context.Context) error {
 			Prompt: autocert.AcceptTOS,
 		}
 
+		slog.Info("Setting up tls certs", "domains", s.Domains)
 		m.HostPolicy = autocert.HostWhitelist(s.Domains...)
 
 		if err := os.MkdirAll(s.CertDir, os.ModePerm); err != nil {
@@ -38,12 +40,16 @@ func (s *server) serve(ctx context.Context) error {
 		srv.Handler = m.HTTPHandler(http.HandlerFunc(s.HTTPSChallengeFallbackHandler))
 
 		crtSrv := &http.Server{
-			Addr:      ":443",
 			Handler:   s.Handler,
+			Addr:      ":8883",
 			TLSConfig: m.TLSConfig(),
 		}
 		//TODO return errors
-		go crtSrv.ListenAndServeTLS("", "")
+		go func() {
+			if err := crtSrv.ListenAndServeTLS("", ""); err != nil {
+				slog.Error("tls server error", "error", err)
+			}
+		}()
 		defer crtSrv.Shutdown(context.Background())
 	}
 
@@ -58,8 +64,7 @@ func (s *server) serve(ctx context.Context) error {
 func (s *server) HTTPSChallengeFallbackHandler(w http.ResponseWriter, r *http.Request) {
 	host, _, err := net.SplitHostPort(r.Host)
 	if err != nil {
-		http.Error(w, "Something went wrong", http.StatusInternalServerError)
-		return
+		host = r.Host
 	}
 	if slices.Contains(s.Domains, host) {
 		if r.Method != "GET" && r.Method != "HEAD" {
@@ -78,5 +83,5 @@ func stripPort(hostport string) string {
 	if err != nil {
 		return hostport
 	}
-	return net.JoinHostPort(host, "443")
+	return net.JoinHostPort(host, "8883")
 }
