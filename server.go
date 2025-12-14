@@ -2,8 +2,10 @@ package main
 
 import (
 	"context"
+	"net"
 	"net/http"
 	"os"
+	"slices"
 
 	"golang.org/x/crypto/acme/autocert"
 )
@@ -33,7 +35,7 @@ func (s *server) serve(ctx context.Context) error {
 			return err
 		}
 		m.Cache = autocert.DirCache(s.CertDir)
-		srv.Handler = m.HTTPHandler(nil)
+		srv.Handler = m.HTTPHandler(http.HandlerFunc(s.HTTPSChallengeFallbackHandler))
 
 		crtSrv := &http.Server{
 			Addr:      ":443",
@@ -51,4 +53,30 @@ func (s *server) serve(ctx context.Context) error {
 	//TODO return errors
 	srv.Shutdown(context.Background())
 	return nil
+}
+
+func (s *server) HTTPSChallengeFallbackHandler(w http.ResponseWriter, r *http.Request) {
+	host, _, err := net.SplitHostPort(r.Host)
+	if err != nil {
+		http.Error(w, "Something went wrong", http.StatusInternalServerError)
+		return
+	}
+	if slices.Contains(s.Domains, host) {
+		if r.Method != "GET" && r.Method != "HEAD" {
+			http.Error(w, "Use HTTPS", http.StatusBadRequest)
+			return
+		}
+		target := "https://" + stripPort(r.Host) + r.URL.RequestURI()
+		http.Redirect(w, r, target, http.StatusFound)
+		return
+	}
+	s.Handler.ServeHTTP(w, r)
+}
+
+func stripPort(hostport string) string {
+	host, _, err := net.SplitHostPort(hostport)
+	if err != nil {
+		return hostport
+	}
+	return net.JoinHostPort(host, "443")
 }
