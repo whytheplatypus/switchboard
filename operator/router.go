@@ -3,10 +3,10 @@ package operator
 import (
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
-	"sort"
 	"strings"
 	"sync"
 )
@@ -16,39 +16,21 @@ var (
 	ErrDuplicateEntry = errors.New("mdns: duplicate entry recieved")
 )
 
-var defaultRouter = &Router{}
-
-type phonebookIndex []string
-
-func (i phonebookIndex) Len() int           { return len(i) }
-func (i phonebookIndex) Swap(j, k int)      { i[j], i[k] = i[k], i[j] }
-func (i phonebookIndex) Less(j, k int) bool { return len(i[j]) > len(i[k]) }
+var DefaultRouter = &Router{}
 
 type Router struct {
-	phonebook map[string]*url.URL
-	index     phonebookIndex
+	phonebook map[string]*url.URL // host names only
 	mu        sync.Mutex
-	matcher   func(pattern *url.URL, requested *url.URL) bool
 }
 
 func (r *Router) register(pattern string, target *url.URL) {
 	r.mu.Lock()
+	defer r.mu.Unlock()
 	if r.phonebook == nil {
 		r.phonebook = map[string]*url.URL{}
 	}
-	defer r.mu.Unlock()
 	r.phonebook[pattern] = target
-	r.updateIndex()
-}
-
-func (r *Router) updateIndex() {
-	r.index = phonebookIndex(make([]string, len(r.phonebook)))
-	i := 0
-	for k := range r.phonebook {
-		r.index[i] = k
-		i++
-	}
-	sort.Sort(r.index)
+	slog.Info("Registered route", "pattern", pattern, "target", target)
 }
 
 func (r *Router) direct(req *http.Request) {
@@ -56,6 +38,7 @@ func (r *Router) direct(req *http.Request) {
 	if target == nil {
 		panic("No Target URL found")
 	}
+	slog.Info("Directing request", "pattern", pattern, "target", target, "request.host", req.Host, "request", req.URL.String())
 	targetQuery := target.RawQuery
 	req.URL.Scheme = target.Scheme
 	req.URL.Host = target.Host
@@ -76,26 +59,30 @@ func (r *Router) direct(req *http.Request) {
 }
 
 func (r *Router) lookup(req *http.Request) (*url.URL, *url.URL) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	req.URL.Host = req.Host
-	for _, v := range r.index {
-		u, err := url.Parse(v)
-		if err != nil {
-			panic(err)
-		}
-		if r.match(u, req.URL) {
-			return r.phonebook[v], u
-		}
+	slog.Info("Looking up route", "host", req.Host, "path", req.URL.Path)
+	if req.URL.Scheme == "" {
+		req.URL.Scheme = "http"
 	}
-	return nil, nil
-}
+	prefix := strings.TrimPrefix(req.URL.Path, "/")
+	prefix, _, _ = strings.Cut(prefix, "/")
+	pattern, err := url.Parse(fmt.Sprintf("%s://%s/%s", req.URL.Scheme, req.Host, prefix))
+	if err != nil {
+		slog.Error("Failed to parse URL", "error", err)
+		return nil, nil
+	}
+	if target, ok := r.phonebook[pattern.String()]; ok {
+		return target, pattern
+	}
+	pattern, err = url.Parse(fmt.Sprintf("%s://%s", req.URL.Scheme, req.Host))
+	if err != nil {
+		slog.Error("Failed to parse URL", "error", err)
+		return nil, nil
+	}
+	if target, ok := r.phonebook[pattern.String()]; ok {
+		return target, pattern
+	}
 
-func (r *Router) match(pattern *url.URL, requested *url.URL) bool {
-	if r.matcher != nil {
-		return r.matcher(pattern, requested)
-	}
-	return defaultMatch(pattern, requested)
+	return nil, nil
 }
 
 func (r *Router) Handler() *httputil.ReverseProxy {
@@ -106,9 +93,5 @@ func (r *Router) Handler() *httputil.ReverseProxy {
 }
 
 func Handler() *httputil.ReverseProxy {
-	return defaultRouter.Handler()
-}
-
-func defaultMatch(p *url.URL, r *url.URL) bool {
-	return (p.Host == "" || p.Host == r.Host) && strings.HasPrefix(r.Path, p.Path) && strings.Contains(r.RawQuery, p.RawQuery)
+	return DefaultRouter.Handler()
 }

@@ -2,7 +2,7 @@ package operator
 
 import (
 	"fmt"
-	"io/ioutil"
+	"io"
 	"log"
 	"net/http"
 	"net/http/httptest"
@@ -23,7 +23,7 @@ func parseURL(s string) *url.URL {
 }
 
 func TestHandler(t *testing.T) {
-	router := defaultRouter.Handler()
+	router := DefaultRouter.Handler()
 	h := http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
 		defer func() {
 			if err := recover(); err != nil {
@@ -53,21 +53,9 @@ func TestHandler(t *testing.T) {
 			"404 page not found\n",
 		},
 		{
-			"/test",
-			parseURL(pathEchoSrv.URL),
-			fmt.Sprintf("%s/%s", srv.URL, "test"),
-			"/",
-		},
-		{
 			srv.URL,
 			parseURL(pathEchoSrv.URL),
 			fmt.Sprintf("%s/%s", srv.URL, "test"),
-			"/test",
-		},
-		{
-			fmt.Sprintf("%s/%s", srv.URL, "other/"),
-			parseURL(pathEchoSrv.URL),
-			fmt.Sprintf("%s/%s", srv.URL, "other/test"),
 			"/test",
 		},
 		{
@@ -76,24 +64,36 @@ func TestHandler(t *testing.T) {
 			fmt.Sprintf("%s/%s", srv.URL, "test/"),
 			"/test/",
 		},
+		{
+			fmt.Sprintf("%s/%s", srv.URL, "test"),
+			parseURL(pathEchoSrv.URL),
+			fmt.Sprintf("%s/%s", srv.URL, "test"),
+			"/",
+		},
+		{
+			fmt.Sprintf("%s/%s", srv.URL, "other"),
+			parseURL(pathEchoSrv.URL),
+			fmt.Sprintf("%s/%s", srv.URL, "other/test"),
+			"/test",
+		},
 	}
-	for _, tt := range tests {
+	for i, tt := range tests {
 		if tt.pattern != "" {
-			defaultRouter.register(tt.pattern, tt.target)
+			DefaultRouter.register(tt.pattern, tt.target)
 		}
 		resp, err := c.Get(tt.url)
 		if err != nil {
 			t.Fatal(err)
 		}
-		b, err := ioutil.ReadAll(resp.Body)
+		b, err := io.ReadAll(resp.Body)
 		if err != nil {
 			t.Fatal(err)
 		}
 		if string(b) != tt.result {
-			t.Fatal("wrong route, got", string(b))
+			t.Fatal("wrong route, got", string(b), "wanted", tt.result, "test", i)
 		}
 	}
-	if len(defaultRouter.index) > 3 {
-		t.Fatal("duplicate entries were registered", len(defaultRouter.index))
+	if len(DefaultRouter.phonebook) > 3 {
+		t.Fatal("duplicate entries were registered", len(DefaultRouter.phonebook))
 	}
 }

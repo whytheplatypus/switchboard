@@ -30,22 +30,6 @@ func route(args []string, ctx context.Context) {
 		configureLog(*httpLog)
 	}
 
-	go func() {
-		entries := operator.Listen(ctx)
-		for entry := range entries {
-			if err := operator.Connect(entry); err != nil {
-				registrationLog.Println(err)
-				continue
-			}
-			// register
-			registrationLog.Printf(`{"send":"%s","to":"http://%s:%d"}`,
-				entry.InfoFields[0],
-				entry.AddrV4,
-				entry.Port,
-			)
-		}
-	}()
-
 	router := operator.Handler()
 
 	router.ModifyResponse = func(r *http.Response) error {
@@ -82,6 +66,9 @@ func route(args []string, ctx context.Context) {
 		Domains: domains,
 	}
 
+	go func() {
+		operator.Listen(ctx, operator.DefaultRouter)
+	}()
 	if err := srv.serve(ctx); err != nil {
 		routingLog.Fatal(err)
 	}

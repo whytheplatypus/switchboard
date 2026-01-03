@@ -9,15 +9,43 @@ import (
 	"net"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/hashicorp/mdns"
 	"github.com/whytheplatypus/switchboard/config"
 )
 
-func Listen(ctx context.Context) <-chan *mdns.ServiceEntry {
-	// Make a channel for results and start listening
+type router interface {
+	register(pattern string, target *url.URL)
+}
+
+func Listen(ctx context.Context, r router) {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	wg := sync.WaitGroup{}
 	entries := make(chan *mdns.ServiceEntry, 5)
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+
+		for {
+			select {
+			case entry := <-entries:
+				slog.Info("registration", "pattern",
+					entry.InfoFields[0], "ip",
+					entry.AddrV4, "port",
+					entry.Port,
+				)
+				if err := Connect(entry, r); err != nil {
+					slog.Error("failed to connect", "error", err)
+				}
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+	// Make a channel for results and start listening
 	params := mdns.DefaultParams(config.ServiceName)
 	if config.Iface != "" {
 		if iface, err := net.InterfaceByName(config.Iface); err == nil {
@@ -29,40 +57,34 @@ func Listen(ctx context.Context) <-chan *mdns.ServiceEntry {
 	}
 	params.Logger = log.New(io.Discard, "", 0)
 	params.Entries = entries
+	params.Timeout = time.Second * 5
 
-	// Start the lookup
+	wg.Add(1)
 	go func() {
-		ticker := time.NewTicker(5 * time.Second)
-		defer ticker.Stop()
-		defer close(entries)
+		defer wg.Done()
+
 		for {
 			select {
 			case <-ctx.Done():
 				return
-			case <-ticker.C:
-				if err := mdns.Query(params); err != nil {
+			default:
+				if err := mdns.QueryContext(ctx, params); err != nil {
 					slog.Error("mdns query failed", "error", err)
 				}
 			}
 		}
 	}()
-
-	return entries
+	wg.Wait()
 }
 
-func Connect(entry *mdns.ServiceEntry) error {
+func Connect(entry *mdns.ServiceEntry, r router) error {
 	if !strings.Contains(entry.Name, config.ServiceName) {
 		return ErrUnknownEntry
 	}
-	return register(entry)
-}
-
-func register(entry *mdns.ServiceEntry) error {
-
 	u, err := url.Parse(fmt.Sprintf("http://%s:%d", entry.AddrV4, entry.Port))
 	if err != nil {
 		return err
 	}
-	defaultRouter.register(entry.InfoFields[0], u)
+	r.register(entry.InfoFields[0], u)
 	return nil
 }
