@@ -6,20 +6,11 @@ import (
 	"log"
 	"net/http"
 	"net/http/httptest"
-	"net/url"
 	"testing"
 )
 
 func init() {
 	log.SetFlags(log.Llongfile)
-}
-
-func parseURL(s string) *url.URL {
-	u, err := url.Parse(s)
-	if err != nil {
-		panic(err)
-	}
-	return u
 }
 
 func TestHandler(t *testing.T) {
@@ -42,37 +33,37 @@ func TestHandler(t *testing.T) {
 
 	tests := []struct {
 		pattern string
-		target  *url.URL
+		target  string
 		url     string
 		result  string
 	}{
 		{
 			"",
-			nil,
+			"",
 			fmt.Sprintf("%s/%s", srv.URL, "not-found"),
 			"404 page not found\n",
 		},
 		{
 			srv.URL,
-			parseURL(pathEchoSrv.URL),
+			pathEchoSrv.URL,
 			fmt.Sprintf("%s/%s", srv.URL, "test"),
 			"/test",
 		},
 		{
 			srv.URL,
-			parseURL(pathEchoSrv.URL),
+			pathEchoSrv.URL,
 			fmt.Sprintf("%s/%s", srv.URL, "test/"),
 			"/test/",
 		},
 		{
 			fmt.Sprintf("%s/%s", srv.URL, "test"),
-			parseURL(pathEchoSrv.URL),
+			pathEchoSrv.URL,
 			fmt.Sprintf("%s/%s", srv.URL, "test"),
 			"/",
 		},
 		{
 			fmt.Sprintf("%s/%s", srv.URL, "other"),
-			parseURL(pathEchoSrv.URL),
+			pathEchoSrv.URL,
 			fmt.Sprintf("%s/%s", srv.URL, "other/test"),
 			"/test",
 		},

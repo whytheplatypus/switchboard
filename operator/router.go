@@ -19,15 +19,20 @@ var (
 var DefaultRouter = &Router{}
 
 type Router struct {
-	phonebook map[string]*url.URL // host names only
+	phonebook map[string]string
 	mu        sync.Mutex
 }
 
-func (r *Router) register(pattern string, target *url.URL) {
+func (r *Router) register(pattern string, target string) {
+	if r.phonebook != nil {
+		if target == r.phonebook[pattern] {
+			return
+		}
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.phonebook == nil {
-		r.phonebook = map[string]*url.URL{}
+		r.phonebook = map[string]string{}
 	}
 	r.phonebook[pattern] = target
 	slog.Info("Registered route", "pattern", pattern, "target", target)
@@ -65,21 +70,33 @@ func (r *Router) lookup(req *http.Request) (*url.URL, *url.URL) {
 	}
 	prefix := strings.TrimPrefix(req.URL.Path, "/")
 	prefix, _, _ = strings.Cut(prefix, "/")
+
 	pattern, err := url.Parse(fmt.Sprintf("%s://%s/%s", req.URL.Scheme, req.Host, prefix))
 	if err != nil {
 		slog.Error("Failed to parse URL", "error", err)
 		return nil, nil
 	}
 	if target, ok := r.phonebook[pattern.String()]; ok {
-		return target, pattern
+		t, err := url.Parse(target)
+		if err != nil {
+			slog.Error("Failed to parse URL", "error", err)
+			return nil, nil
+		}
+		return t, pattern
 	}
 	pattern, err = url.Parse(fmt.Sprintf("%s://%s", req.URL.Scheme, req.Host))
+
 	if err != nil {
 		slog.Error("Failed to parse URL", "error", err)
 		return nil, nil
 	}
 	if target, ok := r.phonebook[pattern.String()]; ok {
-		return target, pattern
+		t, err := url.Parse(target)
+		if err != nil {
+			slog.Error("Failed to parse URL", "error", err)
+			return nil, nil
+		}
+		return t, pattern
 	}
 
 	return nil, nil

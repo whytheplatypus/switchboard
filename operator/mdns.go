@@ -17,7 +17,7 @@ import (
 )
 
 type router interface {
-	register(pattern string, target *url.URL)
+	register(pattern string, target string)
 }
 
 func Listen(ctx context.Context, r router) {
@@ -81,8 +81,9 @@ func Connect(entry *mdns.ServiceEntry, r router) error {
 	if !strings.Contains(entry.Name, config.ServiceName) {
 		return ErrUnknownEntry
 	}
-	u, err := url.Parse(fmt.Sprintf("http://%s:%d", entry.AddrV4, entry.Port))
-	if err != nil {
+	u := fmt.Sprintf("http://%s:%d", entry.AddrV4, entry.Port)
+
+	if _, err := url.Parse(u); err != nil {
 		return err
 	}
 	r.register(entry.InfoFields[0], u)
