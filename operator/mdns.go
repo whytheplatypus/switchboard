@@ -17,14 +17,14 @@ import (
 )
 
 type router interface {
-	register(pattern string, target *url.URL)
+	register(pattern string, target string)
 }
 
 func Listen(ctx context.Context, r router) {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	wg := sync.WaitGroup{}
-	entries := make(chan *mdns.ServiceEntry, 5)
+	entries := make(chan *mdns.ServiceEntry)
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
@@ -81,8 +81,9 @@ func Connect(entry *mdns.ServiceEntry, r router) error {
 	if !strings.Contains(entry.Name, config.ServiceName) {
 		return ErrUnknownEntry
 	}
-	u, err := url.Parse(fmt.Sprintf("http://%s:%d", entry.AddrV4, entry.Port))
-	if err != nil {
+	u := fmt.Sprintf("http://%s:%d", entry.AddrV4, entry.Port)
+
+	if _, err := url.Parse(u); err != nil {
 		return err
 	}
 	r.register(entry.InfoFields[0], u)
