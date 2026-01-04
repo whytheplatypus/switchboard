@@ -24,7 +24,7 @@ func Listen(ctx context.Context, r router) {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	wg := sync.WaitGroup{}
-	entries := make(chan *mdns.ServiceEntry, 5)
+	entries := make(chan *mdns.ServiceEntry)
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
