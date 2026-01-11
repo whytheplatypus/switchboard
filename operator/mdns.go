@@ -2,6 +2,7 @@ package operator
 
 import (
 	"context"
+	"crypto/md5"
 	"fmt"
 	"io"
 	"log"
@@ -81,11 +82,25 @@ func Connect(entry *mdns.ServiceEntry, r router) error {
 	if !strings.Contains(entry.Name, config.ServiceName) {
 		return ErrUnknownEntry
 	}
-	u := fmt.Sprintf("http://%s:%d", entry.AddrV4, entry.Port)
+	if len(entry.InfoFields) < 2 {
+		slog.Error("invalid entry", "error", "wrong number of info fields", "entry", entry)
+		return ErrUnknownEntry
+	}
+	pattern := entry.InfoFields[0]
+	ip := entry.AddrV4
+	port := entry.Port
+	hash := entry.InfoFields[1]
+	id := fmt.Sprintf("%s-%s-%d", pattern, ip.String(), port)
+	if hash != fmt.Sprintf("%x", md5.Sum([]byte(id))) {
+		slog.Error("invalid entry", "error", "hash mismatch")
+		return ErrUnknownEntry
+	}
+
+	u := fmt.Sprintf("http://%s:%d", ip.String(), port)
 
 	if _, err := url.Parse(u); err != nil {
 		return err
 	}
-	r.register(entry.InfoFields[0], u)
+	r.register(pattern, u)
 	return nil
 }
