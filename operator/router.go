@@ -24,8 +24,10 @@ type Router struct {
 }
 
 func (r *Router) register(pattern string, target string) {
+	slog.Info("Registering route", "pattern", pattern, "target", target)
 	if r.phonebook != nil {
 		if target == r.phonebook[pattern] {
+			slog.Info("route found, noop", "pattern", pattern, "target", target)
 			return
 		}
 	}
