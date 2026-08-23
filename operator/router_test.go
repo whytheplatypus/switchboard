@@ -70,7 +70,7 @@ func TestHandler(t *testing.T) {
 	}
 	for i, tt := range tests {
 		if tt.pattern != "" {
-			DefaultRouter.register(tt.pattern, tt.target)
+			DefaultRouter.register(tt.pattern, tt.target, 0)
 		}
 		resp, err := c.Get(tt.url)
 		if err != nil {

@@ -6,7 +6,9 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"log/slog"
 	"net/http"
+	"os"
 	"strings"
 
 	"github.com/gorilla/handlers"
@@ -21,6 +23,7 @@ func route(args []string, ctx context.Context) {
 	var domains StringArray
 	flags.Var(&domains, "domain", "a domain to register a tls cert for")
 	httpLog := flags.String("log-http", "", "The address to serve logs over, no logs are served if empty")
+	apiPort := flags.Int("api-port", 4444, "the port to serve the registration api on")
 	flags.StringVar(&config.Iface, "iface", "", "interface to listen on")
 	if err := flags.Parse(args); err != nil && !strings.HasPrefix(err.Error(), "flag provided but not defined") {
 		log.Fatal(err)
@@ -66,9 +69,23 @@ func route(args []string, ctx context.Context) {
 		Domains: domains,
 	}
 
+	// The control plane: say where to register, ask everyone to do so, and
+	// listen for them. None of it touches the proxy's own listener.
+	if err := operator.Announce(ctx, *apiPort); err != nil {
+		slog.Error("Failed to announce registration api", "error", err)
+		os.Exit(1)
+	}
+	go operator.Summon(ctx)
 	go func() {
-		operator.Listen(ctx, operator.DefaultRouter)
+		api := &server{
+			Addr:    fmt.Sprintf(":%d", *apiPort),
+			Handler: operator.API(),
+		}
+		if err := api.serve(ctx); err != nil {
+			slog.Error("registration api error", "error", err)
+		}
 	}()
+
 	if err := srv.serve(ctx); err != nil {
 		routingLog.Fatal(err)
 	}

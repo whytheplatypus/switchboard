@@ -2,105 +2,81 @@ package operator
 
 import (
 	"context"
-	"crypto/md5"
-	"fmt"
 	"io"
 	"log"
 	"log/slog"
 	"net"
-	"net/url"
-	"strings"
-	"sync"
+	"os"
 	"time"
 
 	"github.com/hashicorp/mdns"
 	"github.com/whytheplatypus/switchboard/config"
 )
 
-type router interface {
-	register(pattern string, target string)
-}
-
-func Listen(ctx context.Context, r router) {
-	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
-	wg := sync.WaitGroup{}
-	entries := make(chan *mdns.ServiceEntry)
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-
-		for {
-			select {
-			case entry := <-entries:
-				slog.Info("registration", "pattern",
-					entry.InfoFields[0], "ip",
-					entry.AddrV4, "port",
-					entry.Port,
-				)
-				if err := Connect(entry, r); err != nil {
-					slog.Error("failed to connect", "error", err)
-				}
-			case <-ctx.Done():
-				return
-			}
-		}
-	}()
-	// Make a channel for results and start listening
-	params := mdns.DefaultParams(config.ServiceName)
-	if config.Iface != "" {
-		if iface, err := net.InterfaceByName(config.Iface); err == nil {
-			slog.Info("Using interface provided", "interface", iface.Name)
-			params.Interface = iface
-		} else {
-			slog.Error("failed to get interface", "error", err)
-		}
-	}
-	params.Logger = log.New(io.Discard, "", 0)
-	params.Entries = entries
-	params.Timeout = time.Second * 5
-
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			default:
-				if err := mdns.QueryContext(ctx, params); err != nil {
-					slog.Error("mdns query failed", "error", err)
-				}
-			}
-		}
-	}()
-	wg.Wait()
-}
-
-func Connect(entry *mdns.ServiceEntry, r router) error {
-	if !strings.Contains(entry.Name, config.ServiceName) {
-		return ErrUnknownEntry
-	}
-	if len(entry.InfoFields) < 2 {
-		slog.Error("invalid entry", "error", "wrong number of info fields", "entry", entry)
-		return ErrUnknownEntry
-	}
-	pattern := entry.InfoFields[0]
-	ip := entry.AddrV4
-	port := entry.Port
-	hash := entry.InfoFields[1]
-	id := fmt.Sprintf("%s-%s-%d", pattern, ip.String(), port)
-	if hash != fmt.Sprintf("%x", md5.Sum([]byte(id))) {
-		slog.Error("invalid entry", "error", "hash mismatch")
-		return ErrUnknownEntry
-	}
-
-	u := fmt.Sprintf("http://%s:%d", ip.String(), port)
-
-	if _, err := url.Parse(u); err != nil {
+// Announce publishes where this operator's registration API can be reached.
+// Hookups look this up to find somewhere to register.
+func Announce(ctx context.Context, port int, ips ...net.IP) error {
+	instance, err := os.Hostname()
+	if err != nil {
 		return err
 	}
-	r.register(pattern, u)
+	service, err := mdns.NewMDNSService(instance, config.OperatorService, "", "", port, ips, nil)
+	if err != nil {
+		return err
+	}
+	server, err := mdns.NewServer(&mdns.Config{
+		Zone:   service,
+		Iface:  config.Interface(),
+		Logger: log.New(io.Discard, "", 0),
+	})
+	if err != nil {
+		return err
+	}
+	slog.Info("Announcing registration api", "service", config.OperatorService, "port", port)
+	go func() {
+		<-ctx.Done()
+		server.Shutdown()
+	}()
 	return nil
+}
+
+// Summon asks every hookup on the network to register itself. Nothing has to
+// answer -- the question is the message -- so the replies are thrown away. It
+// repeats so that a hookup which starts, reboots, or rejoins the network after
+// this operator did still gets asked.
+func Summon(ctx context.Context) {
+	ticker := time.NewTicker(config.Summon)
+	defer ticker.Stop()
+	for {
+		ask(ctx)
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+	}
+}
+
+func ask(ctx context.Context) {
+	// The query will not block on a full channel, it drops entries instead, so
+	// the answers have to be drained even though they say nothing we need.
+	answers := make(chan *mdns.ServiceEntry, 5)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for range answers {
+		}
+	}()
+
+	params := mdns.DefaultParams(config.HookupService)
+	params.Entries = answers
+	params.Interface = config.Interface()
+	params.Logger = log.New(io.Discard, "", 0)
+
+	slog.Info("Summoning hookups", "service", config.HookupService)
+	if err := mdns.QueryContext(ctx, params); err != nil {
+		slog.Error("mdns query failed", "error", err)
+	}
+	close(answers)
+	<-done
 }

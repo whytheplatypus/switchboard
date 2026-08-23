@@ -21,27 +21,24 @@ func hookup(args []string, ctx context.Context) {
 
 	host, p, err := net.SplitHostPort(*addr)
 	if err != nil {
-		slog.Error("Failed to parse address", err)
+		slog.Error("Failed to parse address", "error", err, "addr", *addr)
 		os.Exit(1)
 	}
 
 	ip := net.ParseIP(host)
 	if ip == nil {
-		slog.Error("Failed to parse IP", err)
+		slog.Error("Failed to parse IP", "host", host)
 		os.Exit(1)
 	}
 
 	port, err := strconv.Atoi(p)
 	if err != nil {
-		slog.Error("Failed to parse port", err)
+		slog.Error("Failed to parse port", "error", err, "port", p)
 		os.Exit(1)
 	}
 
-	server := client.Hookup(*pattern, port, ip)
-	if server == nil {
-		slog.Error("Failed to create server")
+	if err := client.Hookup(ctx, *pattern, ip, port); err != nil {
+		slog.Error("Failed to hook up", "error", err)
 		os.Exit(1)
 	}
-	defer server.Shutdown()
-	<-ctx.Done()
 }
