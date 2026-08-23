@@ -64,7 +64,7 @@ func route(args []string, ctx context.Context) {
 
 	srv := &server{
 		Addr:    fmt.Sprintf(":%d", *port),
-		Handler: handlers.LoggingHandler(&lWriter{accessLog}, h),
+		Handler: handlers.LoggingHandler(&lWriter{accessLog}, operator.Guard(h)),
 		CertDir: *cdir,
 		Domains: domains,
 	}

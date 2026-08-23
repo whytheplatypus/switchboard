@@ -17,6 +17,8 @@ import (
 type Registration struct {
 	Pattern string `json:"pattern"`
 	Addr    string `json:"addr"`
+	// Auth, when set, is basic auth the switchboard enforces on this route.
+	Auth *Auth `json:"auth,omitempty"`
 }
 
 // API serves the registration endpoint. It is the control plane and belongs on
@@ -45,9 +47,14 @@ func (rt *Router) handleRegister(rw http.ResponseWriter, r *http.Request) {
 		http.Error(rw, err.Error(), http.StatusBadRequest)
 		return
 	}
+	if reg.Auth != nil && (reg.Auth.Username == "" || reg.Auth.Password == "") {
+		http.Error(rw, "auth needs both a username and a password", http.StatusBadRequest)
+		return
+	}
 
-	slog.Info("registration", "pattern", reg.Pattern, "addr", reg.Addr, "from", r.RemoteAddr)
-	rt.register(reg.Pattern, fmt.Sprintf("http://%s", reg.Addr), config.Lease)
+	// Whatever else is logged here, never the password.
+	slog.Info("registration", "pattern", reg.Pattern, "addr", reg.Addr, "guarded", reg.Auth != nil, "from", r.RemoteAddr)
+	rt.register(reg.Pattern, fmt.Sprintf("http://%s", reg.Addr), reg.Auth, config.Lease)
 	rw.WriteHeader(http.StatusNoContent)
 }
 

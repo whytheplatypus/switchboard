@@ -25,6 +25,32 @@ switchboard hookup -addr 10.0.0.4:8000 -pattern http://first.domain/test
 
 Both commands take `-iface` to pin mDNS to a particular interface.
 
+Putting a password on a route
+----
+
+A hookup can ask the switchboard to enforce basic auth on the route it
+registers. The service itself stays unguarded and does not need to know
+anything about it.
+
+```
+SWITCHBOARD_BASIC_AUTH_USER=ada SWITCHBOARD_BASIC_AUTH_PASSWORD=s3cret \
+  switchboard hookup -addr 10.0.0.4:8000 -pattern http://first.domain/private
+```
+
+The equivalent flags are `-basic-auth-user` and `-basic-auth-password`. Prefer
+the variables: a flag puts the password in `ps` for every user on the box.
+Setting one half without the other is an error rather than an open route.
+
+The credential guards the route, not the service, so the `Authorization` header
+is stripped before the request is forwarded. Requests without it get a `401`
+and a `Basic` challenge; a request for a route nobody registered is still a
+`404`, whether or not it carries credentials.
+
+Registration happens over plain HTTP on the local network, so the password
+crosses the wire in the clear, as it does again in every request that is not
+behind one of the TLS domains. This is a lock on the front door of a house on
+a network you already trust -- it is not a substitute for one.
+
 How they find each other
 ----
 

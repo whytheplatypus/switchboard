@@ -20,15 +20,33 @@ import (
 	"github.com/whytheplatypus/switchboard/operator"
 )
 
+// A Service is what this hookup asks operators to route to it. Anything the
+// registration grows belongs here rather than in another argument.
+type Service struct {
+	Pattern string
+	IP      net.IP
+	Port    int
+	// Auth, when set, is basic auth operators enforce on this route.
+	Auth *operator.Auth
+}
+
+func (s Service) registration() operator.Registration {
+	return operator.Registration{
+		Pattern: s.Pattern,
+		Addr:    net.JoinHostPort(s.IP.String(), fmt.Sprint(s.Port)),
+		Auth:    s.Auth,
+	}
+}
+
 // Hookup keeps this service registered with every operator on the network
 // until ctx is cancelled. It holds no list of operators: each pass rediscovers
 // them, so an operator that restarts, moves, or appears for the first time is
 // picked up by the very next pass.
-func Hookup(ctx context.Context, pattern string, ip net.IP, port int) error {
-	addr := net.JoinHostPort(ip.String(), fmt.Sprint(port))
+func Hookup(ctx context.Context, svc Service) error {
+	reg := svc.registration()
 
 	summons := make(chan struct{}, 1)
-	server, err := answer(summons, ip, port)
+	server, err := answer(summons, svc.IP, svc.Port)
 	if err != nil {
 		return err
 	}
@@ -37,7 +55,7 @@ func Hookup(ctx context.Context, pattern string, ip net.IP, port int) error {
 	ticker := time.NewTicker(config.Heartbeat)
 	defer ticker.Stop()
 	for {
-		register(ctx, pattern, addr)
+		register(ctx, reg)
 		select {
 		case <-ctx.Done():
 			return nil
@@ -84,7 +102,7 @@ func (d *doorbell) Records(q dns.Question) []dns.RR {
 }
 
 // register tells every operator it can find where to send this pattern.
-func register(ctx context.Context, pattern, addr string) {
+func register(ctx context.Context, reg operator.Registration) {
 	operators := make(chan *mdns.ServiceEntry, 5)
 	done := make(chan struct{})
 	go func() {
@@ -95,11 +113,11 @@ func register(ctx context.Context, pattern, addr string) {
 				slog.Error("unusable operator", "error", err, "operator", entry.Name)
 				continue
 			}
-			if err := post(api, pattern, addr); err != nil {
+			if err := post(api, reg); err != nil {
 				slog.Error("failed to register", "error", err, "operator", api)
 				continue
 			}
-			slog.Info("registered", "pattern", pattern, "addr", addr, "operator", api)
+			slog.Info("registered", "pattern", reg.Pattern, "addr", reg.Addr, "guarded", reg.Auth != nil, "operator", api)
 		}
 	}()
 
@@ -125,8 +143,8 @@ func endpoint(entry *mdns.ServiceEntry) (string, error) {
 	return "", fmt.Errorf("operator %q announced no address", entry.Name)
 }
 
-func post(api, pattern, addr string) error {
-	body, err := json.Marshal(operator.Registration{Pattern: pattern, Addr: addr})
+func post(api string, reg operator.Registration) error {
+	body, err := json.Marshal(reg)
 	if err != nil {
 		return err
 	}

@@ -62,3 +62,25 @@ kills the test session. Match on `pgrep -x switchboard` and check
 that assertion from a distance. New tests should build their own `&Router{}` and
 use the method form (`r.API()`, `r.register`) rather than the package-level
 wrappers.
+
+## 2026-08-23 The Director cannot reject a request
+**Category:** architecture
+**Confidence:** confirmed
+**Context:** operator/auth.go, operator/router.go
+
+`httputil.ReverseProxy.Director` gets no `ResponseWriter`, so it cannot answer
+401. Anything that turns a request away has to be middleware wrapped around the
+proxy -- `Router.Guard` -- which is why `find` returns the whole `*extension`
+rather than just a target: the guard and the director both need it, and each
+looks it up independently.
+
+## 2026-08-23 Registration is the only source of route credentials
+**Category:** architecture
+**Confidence:** confirmed
+**Context:** operator/api.go, client/client.go
+
+The operator keeps no config of its own, so a route's basic auth lives only in
+the registration that created it. Every heartbeat resends it and re-registering
+must carry it, or a lease refresh would quietly turn a guarded route open. The
+`guarded=true|false` field on the "Registered route" log line is there to make
+that visible; the password itself is never logged.

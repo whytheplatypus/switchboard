@@ -18,6 +18,7 @@ var DefaultRouter = &Router{}
 // unplugged, or loses the network falls out of the phonebook on its own.
 type extension struct {
 	target  string
+	auth    *Auth
 	expires time.Time
 }
 
@@ -31,7 +32,7 @@ type Router struct {
 	mu        sync.Mutex
 }
 
-func (r *Router) register(pattern string, target string, lease time.Duration) {
+func (r *Router) register(pattern string, target string, auth *Auth, lease time.Duration) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.phonebook == nil {
@@ -41,10 +42,10 @@ func (r *Router) register(pattern string, target string, lease time.Duration) {
 	// A heartbeat has to extend the lease even when nothing else changed, so
 	// only the logging is skipped for a repeat, never the registration.
 	if e, ok := r.phonebook[pattern]; !ok || e.target != target {
-		slog.Info("Registered route", "pattern", pattern, "target", target, "lease", lease)
+		slog.Info("Registered route", "pattern", pattern, "target", target, "guarded", auth != nil, "lease", lease)
 	}
 
-	e := &extension{target: target}
+	e := &extension{target: target, auth: auth}
 	if lease > 0 {
 		e.expires = time.Now().Add(lease)
 	}
@@ -65,9 +66,18 @@ func (r *Router) forget() {
 }
 
 func (r *Router) direct(req *http.Request) {
-	target, pattern := r.lookup(req)
-	if target == nil {
+	e, pattern := r.find(req)
+	if e == nil {
 		panic("No Target URL found")
+	}
+	target, err := url.Parse(e.target)
+	if err != nil {
+		panic(err)
+	}
+	if e.auth != nil {
+		// The credential is the switchboard's. The service behind it did not
+		// issue it and has no use for it.
+		req.Header.Del("Authorization")
 	}
 	slog.Info("Directing request", "pattern", pattern, "target", target, "request.host", req.Host, "request", req.URL.String())
 	targetQuery := target.RawQuery
@@ -89,7 +99,9 @@ func (r *Router) direct(req *http.Request) {
 
 }
 
-func (r *Router) lookup(req *http.Request) (*url.URL, *url.URL) {
+// find returns the live extension serving this request, and the pattern that
+// matched it.
+func (r *Router) find(req *http.Request) (*extension, *url.URL) {
 	slog.Info("Looking up route", "host", req.Host, "path", req.URL.Path)
 	if req.URL.Scheme == "" {
 		req.URL.Scheme = "http"
@@ -100,15 +112,15 @@ func (r *Router) lookup(req *http.Request) (*url.URL, *url.URL) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	// The longer pattern wins, so try host and first path segment first.
-	if target, pattern := r.dial(fmt.Sprintf("%s://%s/%s", req.URL.Scheme, req.Host, prefix)); target != nil {
-		return target, pattern
+	if e, pattern := r.dial(fmt.Sprintf("%s://%s/%s", req.URL.Scheme, req.Host, prefix)); e != nil {
+		return e, pattern
 	}
 	return r.dial(fmt.Sprintf("%s://%s", req.URL.Scheme, req.Host))
 }
 
-// dial resolves one pattern to its target, if it is registered and still
+// dial resolves one pattern to its extension, if it is registered and still
 // holds a live lease. Callers must hold the lock.
-func (r *Router) dial(pattern string) (*url.URL, *url.URL) {
+func (r *Router) dial(pattern string) (*extension, *url.URL) {
 	p, err := url.Parse(pattern)
 	if err != nil {
 		slog.Error("Failed to parse URL", "error", err)
@@ -118,12 +130,7 @@ func (r *Router) dial(pattern string) (*url.URL, *url.URL) {
 	if !ok || !e.live() {
 		return nil, nil
 	}
-	target, err := url.Parse(e.target)
-	if err != nil {
-		slog.Error("Failed to parse URL", "error", err)
-		return nil, nil
-	}
-	return target, p
+	return e, p
 }
 
 func (r *Router) Handler() *httputil.ReverseProxy {
