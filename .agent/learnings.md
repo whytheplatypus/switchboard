@@ -84,3 +84,60 @@ the registration that created it. Every heartbeat resends it and re-registering
 must carry it, or a lease refresh would quietly turn a guarded route open. The
 `guarded=true|false` field on the "Registered route" log line is there to make
 that visible; the password itself is never logged.
+
+## 2026-08-24 Being listed in DNS-SD is what makes the doorbell ring wrongly
+**Category:** gotcha
+**Confidence:** confirmed
+**Context:** client/doorbell.go
+
+Any mDNS service that answers the `_services._dns-sd._udp.local.` enumeration
+teaches every service browser on the network its name, and browsers then query
+that name directly and periodically. Such a query is byte for byte what an
+operator summoning hookups sends, so no filter on the question can tell them
+apart. The fix is to not answer the enumeration at all. Filter on the exact
+service or instance address, lowercased, and on PTR/ANY only -- an A lookup for
+this host is not a summons.
+
+## 2026-08-24 http.Post has no timeout and it stalls the heartbeat
+**Category:** failure-mode
+**Confidence:** confirmed
+**Context:** client/client.go
+
+`http.Post` uses `http.DefaultClient`, which has no `Timeout`. An operator that
+accepts the connection and never answers -- a suspended machine, a firewall
+that drops rather than refuses -- blocks it forever, which blocked the whole
+heartbeat loop and let live routes expire with no error logged anywhere. Any
+call out of the heartbeat needs both a client timeout and a context bound on
+the pass, or the loop can be starved by one bad peer.
+
+## 2026-08-24 mdns announces hostname lookups, not your interface
+**Category:** gotcha
+**Confidence:** confirmed
+**Context:** config/config.go, operator/mdns.go
+
+`mdns.NewMDNSService` with an empty `ips` calls `net.LookupIP(hostname)`. On a
+box with tailscale that returned eleven addresses here -- link local, tailnet,
+ula, global v6 and one actual lan address -- and which one a peer ends up using
+depends on which record it parses last. `-iface` does not affect this at all;
+it only binds the multicast socket. Always pass the interface addresses
+explicitly via `config.Addresses()`.
+
+## 2026-08-24 lo cannot carry mdns
+**Category:** gotcha
+**Confidence:** confirmed
+**Context:** manual testing with -iface
+
+The loopback interface has no MULTICAST flag, so pinning `-iface lo` discovers
+nothing, silently. Test discovery against a real interface. `config.Interface`
+now warns about this, but a test that pins to `lo` will still find nothing.
+
+## 2026-08-24 A hookup registers with every operator it can reach
+**Category:** architecture
+**Confidence:** confirmed
+**Context:** client/client.go
+
+There is no scoping on discovery, so "the network" is as wide as multicast
+reaches -- which over a tailnet includes other machines entirely. A hookup
+started for a local test discovered and registered with a remote operator at a
+tailnet address. Leases mean this cleans itself up in 90 seconds, but be aware
+that running a test hookup can write routes into real infrastructure.

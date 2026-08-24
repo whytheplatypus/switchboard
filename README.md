@@ -23,7 +23,11 @@ switchboard hookup -addr 10.0.0.4:8000 -pattern http://first.domain/test
 // requests like https://first.domain/test/hello go to 10.0.0.4:8000
 ```
 
-Both commands take `-iface` to pin mDNS to a particular interface.
+Both commands take `-iface` to pin mDNS to a particular interface. Give it one
+on any box with a vpn, a container bridge, or a hostname in `/etc/hosts`:
+without it the addresses announced come from resolving the hostname, which on
+such a box answers with several addresses, not all of them reachable from this
+network, and not the same one every time.
 
 Putting a password on a route
 ----
@@ -76,6 +80,22 @@ system repair itself:
 * an operator that restarts is repopulated within a heartbeat, or sooner
 * a hookup that dies, is unplugged, or loses the network stops being routed to
   without needing to say goodbye
+* an operator that stops answering is retried, then set aside after three
+  passes, and taken back the moment it answers discovery again
+* a pass that reaches nobody is retried in 5 seconds rather than 30, so
+  recovery is quick while the steady state stays quiet
+
+A hookup remembers the operators that have accepted its registrations rather
+than relying on discovery each time, so a quiet moment on the multicast group
+cannot expire a route that is otherwise perfectly healthy. Every call to an
+operator is given 5 seconds; an operator that accepts connections and then says
+nothing is a failed pass, not a stalled hookup.
+
+The hookup service is deliberately absent from the `_services._dns-sd._udp`
+listing. Being listed there is what sends every service browser on the network
+around to ask about it afterwards, and a hookup cannot tell such a question
+apart from an operator summoning it. Unlisted, the only things that ask are the
+ones that already knew the name.
 
 Anything that can send mDNS on the network can register a route. This is the
 same trust model the discovery layer already had, so there is no authentication

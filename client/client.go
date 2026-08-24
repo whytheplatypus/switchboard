@@ -10,15 +10,24 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
-	"os"
-	"strings"
+	"sort"
+	"sync"
 	"time"
 
 	"github.com/hashicorp/mdns"
-	"github.com/miekg/dns"
 	"github.com/whytheplatypus/switchboard/config"
 	"github.com/whytheplatypus/switchboard/operator"
 )
+
+// forget is how many passes in a row an operator has to fail before a hookup
+// stops trying it. Discovery can always bring it back.
+const forget = 3
+
+// registrar bounds every call to an operator. Without a timeout an operator
+// that accepts the connection and then says nothing -- a suspended machine, a
+// firewall that drops instead of refusing -- holds the heartbeat forever, and
+// the route it was refreshing quietly expires.
+var registrar = &http.Client{Timeout: config.Reach}
 
 // A Service is what this hookup asks operators to route to it. Anything the
 // registration grows belongs here rather than in another argument.
@@ -39,122 +48,219 @@ func (s Service) registration() operator.Registration {
 }
 
 // Hookup keeps this service registered with every operator on the network
-// until ctx is cancelled. It holds no list of operators: each pass rediscovers
-// them, so an operator that restarts, moves, or appears for the first time is
-// picked up by the very next pass.
+// until ctx is cancelled.
 func Hookup(ctx context.Context, svc Service) error {
 	reg := svc.registration()
 
 	summons := make(chan struct{}, 1)
-	server, err := answer(summons, svc.IP, svc.Port)
+	bell, err := newDoorbell(summons, svc.IP, svc.Port)
+	if err != nil {
+		return err
+	}
+	server, err := mdns.NewServer(&mdns.Config{
+		Zone:   bell,
+		Iface:  config.Interface(),
+		Logger: log.New(io.Discard, "", 0),
+	})
 	if err != nil {
 		return err
 	}
 	defer server.Shutdown()
 
-	ticker := time.NewTicker(config.Heartbeat)
-	defer ticker.Stop()
+	known := &operators{}
+	misses := 0
 	for {
-		register(ctx, reg)
+		started := time.Now()
+		if register(ctx, known, reg) {
+			misses = 0
+		} else {
+			misses++
+			slog.Warn("Reached no operator", "passes", misses, "pattern", reg.Pattern)
+		}
+
+		// Anything that rang while the pass was running has been answered by
+		// that very pass.
+		select {
+		case <-summons:
+		default:
+		}
+
+		// A failed pass comes back quickly; a good one waits for the
+		// heartbeat. Either way the wait is measured from where the pass
+		// started, so a slow pass does not push the next one out.
+		wait := config.Heartbeat
+		if misses > 0 {
+			wait = config.Retry
+		}
+		timer := time.NewTimer(time.Until(started.Add(wait)))
 		select {
 		case <-ctx.Done():
+			timer.Stop()
 			return nil
+		case <-timer.C:
 		case <-summons:
-			// An operator just came up; don't make it wait for the heartbeat.
-		case <-ticker.C:
+			timer.Stop()
+			// However eagerly the network rings, passes stay this far apart.
+			if floor := time.Until(started.Add(config.Retry)); floor > 0 {
+				select {
+				case <-ctx.Done():
+					return nil
+				case <-time.After(floor):
+				}
+			}
 		}
 	}
 }
 
-// answer runs the mDNS service an operator summons. Its records are beside the
-// point -- the service exists so that the question reaches us.
-func answer(summons chan<- struct{}, ip net.IP, port int) (*mdns.Server, error) {
-	instance, err := os.Hostname()
-	if err != nil {
-		return nil, err
+// register tells every operator it knows of where to send this pattern, and
+// reports whether any of them took it.
+func register(ctx context.Context, known *operators, reg operator.Registration) bool {
+	// A pass must never outlast a heartbeat or the next one never happens.
+	ctx, cancel := context.WithTimeout(ctx, config.Heartbeat)
+	defer cancel()
+
+	discover(ctx, known)
+
+	// Every operator is called at once. Taking them in turn means a slow one
+	// spends the time the operators behind it needed, which is how a route
+	// that had a perfectly healthy operator to refresh against still expires.
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	worked, failed := []string{}, []string{}
+	for _, api := range known.all() {
+		wg.Add(1)
+		go func(api string) {
+			defer wg.Done()
+			err := post(ctx, api, reg)
+			mu.Lock()
+			defer mu.Unlock()
+			if err != nil {
+				slog.Error("Failed to register", "error", err, "operator", api)
+				failed = append(failed, api)
+				return
+			}
+			slog.Info("Registered", "pattern", reg.Pattern, "addr", reg.Addr, "guarded", reg.Auth != nil, "operator", api)
+			worked = append(worked, api)
+		}(api)
 	}
-	service, err := mdns.NewMDNSService(instance, config.HookupService, "", "", port, []net.IP{ip}, nil)
-	if err != nil {
-		return nil, err
+	wg.Wait()
+
+	// The bookkeeping happens back on one goroutine, so the set of known
+	// operators needs no lock of its own.
+	for _, api := range failed {
+		known.failed(api)
 	}
-	return mdns.NewServer(&mdns.Config{
-		Zone:   &doorbell{service, summons},
-		Iface:  config.Interface(),
-		Logger: log.New(io.Discard, "", 0),
-	})
+	for _, api := range worked {
+		known.worked(api)
+	}
+	return len(worked) > 0
 }
 
-// A doorbell is an mDNS zone that reports being asked about. The server hands
-// it every question on the network, so it listens for its own name only.
-type doorbell struct {
-	*mdns.MDNSService
-	summons chan<- struct{}
-}
-
-func (d *doorbell) Records(q dns.Question) []dns.RR {
-	if strings.HasPrefix(q.Name, config.HookupService) {
-		select {
-		case d.summons <- struct{}{}:
-		default: // one pending summons is as good as ten
-		}
-	}
-	return d.MDNSService.Records(q)
-}
-
-// register tells every operator it can find where to send this pattern.
-func register(ctx context.Context, reg operator.Registration) {
-	operators := make(chan *mdns.ServiceEntry, 5)
+// discover adds every operator answering on the network to the known set.
+func discover(ctx context.Context, known *operators) {
+	found := make(chan *mdns.ServiceEntry, 5)
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		for entry := range operators {
+		for entry := range found {
 			api, err := endpoint(entry)
 			if err != nil {
-				slog.Error("unusable operator", "error", err, "operator", entry.Name)
+				slog.Error("Unusable operator", "error", err, "operator", entry.Name)
 				continue
 			}
-			if err := post(api, reg); err != nil {
-				slog.Error("failed to register", "error", err, "operator", api)
-				continue
-			}
-			slog.Info("registered", "pattern", reg.Pattern, "addr", reg.Addr, "guarded", reg.Auth != nil, "operator", api)
+			known.found(api)
 		}
 	}()
 
 	params := mdns.DefaultParams(config.OperatorService)
-	params.Entries = operators
+	params.Entries = found
 	params.Interface = config.Interface()
 	params.Logger = log.New(io.Discard, "", 0)
 
 	if err := mdns.QueryContext(ctx, params); err != nil {
 		slog.Error("mdns query failed", "error", err)
 	}
-	close(operators)
+	// The query will not block on a full channel, it drops entries instead, so
+	// the channel is only closed once the query is finished with it.
+	close(found)
 	<-done
 }
 
 func endpoint(entry *mdns.ServiceEntry) (string, error) {
+	port := fmt.Sprint(entry.Port)
 	switch {
 	case entry.AddrV4 != nil:
-		return fmt.Sprintf("http://%s/register", net.JoinHostPort(entry.AddrV4.String(), fmt.Sprint(entry.Port))), nil
+		return fmt.Sprintf("http://%s/register", net.JoinHostPort(entry.AddrV4.String(), port)), nil
 	case entry.AddrV6 != nil:
-		return fmt.Sprintf("http://%s/register", net.JoinHostPort(entry.AddrV6.String(), fmt.Sprint(entry.Port))), nil
+		return fmt.Sprintf("http://%s/register", net.JoinHostPort(entry.AddrV6.String(), port)), nil
 	}
 	return "", fmt.Errorf("operator %q announced no address", entry.Name)
 }
 
-func post(api string, reg operator.Registration) error {
+func post(ctx context.Context, api string, reg operator.Registration) error {
 	body, err := json.Marshal(reg)
 	if err != nil {
 		return err
 	}
-	resp, err := http.Post(api, "application/json", bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, api, bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := registrar.Do(req)
 	if err != nil {
 		return err
 	}
 	defer resp.Body.Close()
+	io.Copy(io.Discard, resp.Body)
 	if resp.StatusCode >= http.StatusBadRequest {
 		return fmt.Errorf("%s: %s", api, resp.Status)
 	}
 	return nil
+}
+
+// operators remembers where registrations have been accepted. Discovery is how
+// operators are found, but it must not be how they are kept: a moment of
+// multicast trouble would otherwise stop the heartbeat and let a live route
+// expire. Repeated failure, not one silent lookup, is what retires an entry.
+type operators struct {
+	failures map[string]int
+}
+
+func (o *operators) found(api string) {
+	if o.failures == nil {
+		o.failures = map[string]int{}
+	}
+	if _, ok := o.failures[api]; !ok {
+		slog.Info("Found operator", "operator", api)
+	}
+	o.failures[api] = 0
+}
+
+func (o *operators) worked(api string) {
+	if o.failures != nil {
+		o.failures[api] = 0
+	}
+}
+
+func (o *operators) failed(api string) {
+	if o.failures == nil {
+		return
+	}
+	o.failures[api]++
+	if o.failures[api] >= forget {
+		slog.Warn("Giving up on operator", "operator", api, "passes", o.failures[api])
+		delete(o.failures, api)
+	}
+}
+
+// all is a snapshot, so an operator can be retired while it is being walked.
+func (o *operators) all() []string {
+	apis := make([]string, 0, len(o.failures))
+	for api := range o.failures {
+		apis = append(apis, api)
+	}
+	sort.Strings(apis)
+	return apis
 }
