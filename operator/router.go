@@ -1,7 +1,6 @@
 package operator
 
 import (
-	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -9,41 +8,76 @@ import (
 	"net/url"
 	"strings"
 	"sync"
-)
-
-var (
-	ErrUnknownEntry   = errors.New("mdns: unkown entry type recieved")
-	ErrDuplicateEntry = errors.New("mdns: duplicate entry recieved")
+	"time"
 )
 
 var DefaultRouter = &Router{}
 
+// An extension is a target that stops answering once its lease runs out. A
+// hookup keeps its extension alive by re-registering; anything that dies, is
+// unplugged, or loses the network falls out of the phonebook on its own.
+type extension struct {
+	target  string
+	auth    *Auth
+	expires time.Time
+}
+
+// A zero expiry never runs out, which is what a permanent registration wants.
+func (e *extension) live() bool {
+	return e.expires.IsZero() || time.Now().Before(e.expires)
+}
+
 type Router struct {
-	phonebook map[string]string
+	phonebook map[string]*extension
 	mu        sync.Mutex
 }
 
-func (r *Router) register(pattern string, target string) {
-	slog.Info("Registering route", "pattern", pattern, "target", target)
-	if r.phonebook != nil {
-		if target == r.phonebook[pattern] {
-			slog.Info("route found, noop", "pattern", pattern, "target", target)
-			return
-		}
-	}
+func (r *Router) register(pattern string, target string, auth *Auth, lease time.Duration) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.phonebook == nil {
-		r.phonebook = map[string]string{}
+		r.phonebook = map[string]*extension{}
 	}
-	r.phonebook[pattern] = target
-	slog.Info("Registered route", "pattern", pattern, "target", target)
+
+	// A heartbeat has to extend the lease even when nothing else changed, so
+	// only the logging is skipped for a repeat, never the registration.
+	if e, ok := r.phonebook[pattern]; !ok || e.target != target {
+		slog.Info("Registered route", "pattern", pattern, "target", target, "guarded", auth != nil, "lease", lease)
+	}
+
+	e := &extension{target: target, auth: auth}
+	if lease > 0 {
+		e.expires = time.Now().Add(lease)
+	}
+	r.phonebook[pattern] = e
+	// Every heartbeat is a chance to sweep, so no timer is needed to keep the
+	// phonebook from filling with the dead.
+	r.forget()
+}
+
+// forget drops expired extensions. Callers must hold the lock.
+func (r *Router) forget() {
+	for pattern, e := range r.phonebook {
+		if !e.live() {
+			slog.Info("Forgetting expired route", "pattern", pattern, "target", e.target)
+			delete(r.phonebook, pattern)
+		}
+	}
 }
 
 func (r *Router) direct(req *http.Request) {
-	target, pattern := r.lookup(req)
-	if target == nil {
+	e, pattern := r.find(req)
+	if e == nil {
 		panic("No Target URL found")
+	}
+	target, err := url.Parse(e.target)
+	if err != nil {
+		panic(err)
+	}
+	if e.auth != nil {
+		// The credential is the switchboard's. The service behind it did not
+		// issue it and has no use for it.
+		req.Header.Del("Authorization")
 	}
 	slog.Info("Directing request", "pattern", pattern, "target", target, "request.host", req.Host, "request", req.URL.String())
 	targetQuery := target.RawQuery
@@ -65,7 +99,9 @@ func (r *Router) direct(req *http.Request) {
 
 }
 
-func (r *Router) lookup(req *http.Request) (*url.URL, *url.URL) {
+// find returns the live extension serving this request, and the pattern that
+// matched it.
+func (r *Router) find(req *http.Request) (*extension, *url.URL) {
 	slog.Info("Looking up route", "host", req.Host, "path", req.URL.Path)
 	if req.URL.Scheme == "" {
 		req.URL.Scheme = "http"
@@ -73,35 +109,28 @@ func (r *Router) lookup(req *http.Request) (*url.URL, *url.URL) {
 	prefix := strings.TrimPrefix(req.URL.Path, "/")
 	prefix, _, _ = strings.Cut(prefix, "/")
 
-	pattern, err := url.Parse(fmt.Sprintf("%s://%s/%s", req.URL.Scheme, req.Host, prefix))
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	// The longer pattern wins, so try host and first path segment first.
+	if e, pattern := r.dial(fmt.Sprintf("%s://%s/%s", req.URL.Scheme, req.Host, prefix)); e != nil {
+		return e, pattern
+	}
+	return r.dial(fmt.Sprintf("%s://%s", req.URL.Scheme, req.Host))
+}
+
+// dial resolves one pattern to its extension, if it is registered and still
+// holds a live lease. Callers must hold the lock.
+func (r *Router) dial(pattern string) (*extension, *url.URL) {
+	p, err := url.Parse(pattern)
 	if err != nil {
 		slog.Error("Failed to parse URL", "error", err)
 		return nil, nil
 	}
-	if target, ok := r.phonebook[pattern.String()]; ok {
-		t, err := url.Parse(target)
-		if err != nil {
-			slog.Error("Failed to parse URL", "error", err)
-			return nil, nil
-		}
-		return t, pattern
-	}
-	pattern, err = url.Parse(fmt.Sprintf("%s://%s", req.URL.Scheme, req.Host))
-
-	if err != nil {
-		slog.Error("Failed to parse URL", "error", err)
+	e, ok := r.phonebook[p.String()]
+	if !ok || !e.live() {
 		return nil, nil
 	}
-	if target, ok := r.phonebook[pattern.String()]; ok {
-		t, err := url.Parse(target)
-		if err != nil {
-			slog.Error("Failed to parse URL", "error", err)
-			return nil, nil
-		}
-		return t, pattern
-	}
-
-	return nil, nil
+	return e, p
 }
 
 func (r *Router) Handler() *httputil.ReverseProxy {
