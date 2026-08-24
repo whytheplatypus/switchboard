@@ -71,7 +71,7 @@ func route(args []string, ctx context.Context) {
 
 	// The control plane: say where to register, ask everyone to do so, and
 	// listen for them. None of it touches the proxy's own listener.
-	if err := operator.Announce(ctx, *apiPort); err != nil {
+	if err := operator.Announce(ctx, *apiPort, config.Addresses()...); err != nil {
 		slog.Error("Failed to announce registration api", "error", err)
 		os.Exit(1)
 	}
